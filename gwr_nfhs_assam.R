@@ -9,7 +9,7 @@ getwd()
 
 # Packages
 library(tidyverse)
-library(naniar)
+library(MASS)
 
 # NFHS Dataset Downloaded from NDAP (https://ndap.niti.gov.in/dataset/6822)
 # Importing
@@ -108,7 +108,7 @@ columns_remove_2 <- names(origin_df_clean)[
 print (columns_remove_2)
 # Removing those columns
 origin_df_clean_2 <- origin_df_clean %>%
-  select(-all_of(columns_remove_2))
+  dplyr::select(-all_of(columns_remove_2))
 
 # Checking which variables have missing values for new dataframe
 origin_df_clean_2 %>%
@@ -119,7 +119,7 @@ origin_df_clean_2 %>%
     short_col = str_trunc(column, width = 60),  # Adjust width as needed
     pct_missing = round(na_count / nrow(origin_df_clean) * 100, 2)
   ) %>%
-  select(short_col, na_count, pct_missing) %>%
+  dplyr::select(short_col, na_count, pct_missing) %>%
   arrange(desc(na_count)) %>%
   print(n = Inf)
 # 16 variables have missing values
@@ -144,3 +144,36 @@ origin_df_clean_2 <- origin_df_clean_2 %>%
 # Check for Missing Values again
 anyNA(origin_df_clean_2)
 # NO Missing Values
+
+# Data Types
+origin_df_clean_2 %>% summarise(across(everything(), class))
+
+# target variable: Women Age Group 15 To 49 Years Who Are Anaemic (%) (UOM:%(Percentage)), Scaling Factor:1 (Women.Age.Group.15.To.49.Years.Who.Are.Anaemic......UOM...Percentage....Scaling.Factor.1)
+
+# Removing part of variables with '......UOM...Percentage....Scaling.Factor.1'
+colnames(origin_df_clean_2) <- gsub("\\.*UOM.*Percentage.*Scaling.*Factor.*1", "", colnames(origin_df_clean_2))
+
+# Removing some more redundant or similar variables to target variable
+origin_df_clean_2 <- origin_df_clean_2 %>%
+  dplyr::select(
+    -Men.Age.Group.15.Years.And.Above.Who.Use.Any.Kind.Of.Tobacco,
+    -Men.Age.Group.15.Years.And.Above.Who.Consume.Alcohol,
+    -Women.Age.Group.15.To.19.Years.Who.Are.Anaemic,
+    -Non.Pregnant.Women.Age.Group.15.To.49.Years.Who.Are.Anaemic,
+    -Pregnant.Women.Age.Group.15.To.49.Years.Who.Are.Anaemic
+  )
+
+# Both-Direction Stepwise Selection (https://www.statology.org/stepwise-regression-r/)
+# Creating temporary dataframe
+temp_df <- origin_df_clean_2 %>% 
+  dplyr::select(-State, -District)
+intercept_only 
+# Defining target variable
+target_var <- "Women.Age.Group.15.To.49.Years.Who.Are.Anaemic"
+
+# Models with all parameters
+res_lm <- lm(as.formula(paste(target_var, "~ .")), data = temp_df)
+step_lm <- stepAIC(res_lm, direction = "both", trace = FALSE)
+summary(step_lm)
+
+summary(step_lm)$coefficients
