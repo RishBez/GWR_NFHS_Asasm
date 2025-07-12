@@ -1,0 +1,19 @@
+# R files
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+.Rproj.user/
+*_cache/
+*.utf8.md
+*.knit.md
+.httr-oauth
+
+# Large data files
+*.csv
+*.xlsx
+*.rds
+
+# Temporary files
+*~
+*.tmp
