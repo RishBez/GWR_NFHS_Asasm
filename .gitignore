@@ -10,7 +10,6 @@
 .httr-oauth
 
 # Large data files
-*.csv
 *.xlsx
 *.rds
 
