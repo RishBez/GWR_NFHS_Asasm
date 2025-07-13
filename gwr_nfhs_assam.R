@@ -1,3 +1,4 @@
+set.seed(123)
 # Clearing Environment
 rm(list = ls())
 # Working Directory
@@ -12,6 +13,11 @@ library(tidyverse)
 library(MASS)
 library(glmnet)
 library(caret)
+library(corrplot)
+library(car)
+library(broom)
+library(randomForest)
+library(Boruta)
 
 # NFHS Dataset Downloaded from NDAP (https://ndap.niti.gov.in/dataset/6822)
 # Importing
@@ -227,3 +233,269 @@ x_enet <- temp_df_enet %>%
   as.matrix() 
 # data
 data_enet <- cbind(x_enet, y_enet)
+
+# Setting up trainControl()
+ctrl_enet <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 10,
+  search = "random",
+  verboseIter = TRUE
+)
+
+# Elastic Net Model
+enet_model <- train(
+  x = x_enet,
+  y = y_enet,
+  method = "glmnet",
+  trControl = ctrl_enet,
+  tuneGrid = expand.grid(alpha = 1, lambda = 10^seq(-2, 2, length = 50)),
+)
+
+
+print(enet_model)
+plot(enet_model)
+
+
+# Extracting out the lamba value
+best_lambda <- enet_model$bestTune$lambda
+lasso_coef <- coef(enet_model$finalModel, s = best_lambda)
+
+# Converting it to a tidy data frame
+coef_df_enet <- as.data.frame(as.matrix(lasso_coef))
+coef_df_enet$Variable <- rownames(coef_df_enet)
+colnames(coef_df_enet)[1] <- "Coefficient"
+
+# Filter non-zero coefficients (excluding intercept)
+selected_vars_enet <- coef_df_enet %>%
+  dplyr::filter(Coefficient != 0 & Variable != "(Intercept)") %>%
+  dplyr::arrange(desc(abs(Coefficient)))
+
+print(selected_vars_enet)
+
+# Extracting Coefficient values to CSV
+write.csv(selected_vars_enet, "Dataset_with_Elastic_Net_Regression_Values.csv", row.names = FALSE)
+
+# top 5 positive coefficients (variables)
+top_positive <- selected_vars_enet %>%
+  arrange(desc(Coefficient)) %>%
+  head(5)
+# top 5 negative coefficients (variables)
+top_negative <- selected_vars_enet %>%
+  arrange(Coefficient) %>%
+  head(5)
+
+# Top 10 variables
+top_10_vars <- c(top_positive$Variable, top_negative$Variable)
+
+# Subsetting the dataframe now for analysis
+origin_df_enet <- origin_df_clean_2 %>%
+  dplyr::select(State, District, Women.Age.Group.15.To.49.Years.Who.Are.Anaemic, all_of(top_10_vars))
+
+# Exporting to CSV
+write.csv(origin_df_enet, 
+          "Dataset_with_Elastic_Net_Regression_Selected_Variables_and_Target_Variable.csv", row.names = FALSE)
+
+# Proceeding with linear regression to eliminate variables based on p-values
+
+# creating temporary dataset without State and District variables
+temp_df_enet <- origin_df_enet %>%
+  dplyr::select(-State, -District)
+
+
+lin_reg_enet <- lm(as.formula(paste(target_var, "~ .")), data = temp_df_enet)
+lin_reg_enet$coefficients
+summary(lin_reg_enet)
+
+# Some variables are signification
+
+# Checking Linear Regression assumptions
+
+# (a) Collinearity
+colnames(temp_df_enet)
+# Renaming variables in temp_df_enet
+colnames(temp_df_enet) <- c(
+  "Women_Anaemic_15_49",
+  "Women_High_Blood_Sugar",
+  "Children_Anaemic_6_59_Months",
+  "Women_BMI_Below_Normal",
+  "Children_ARI_Last_2_Weeks",
+  "Teen_Mothers_15_19",
+  "Women_Mild_BP",
+  "Women_Moderate_Severe_BP",
+  "Children_Severely_Wasted_U5",
+  "Children_BCG_Vaccine_12_23_Months",
+  "Female_Ever_Schooled_6plus"
+)
+cor_enet_var <- cor(temp_df_enet)
+corrplot(cor_enet_var, order = "FPC", method = "color", type = "lower", tl.cex = 0.7, tl.col = rgb(0, 0, 0))
+findCorrelation(cor_enet_var, cutoff = 0.7)
+# VIF Check
+vif(lin_reg_enet)
+# all VIFs < 2.2 - independence assumptions not exactly violated
+
+# (b) Diagnostic Plots
+par(mfrow = c(2,2))
+plot(lin_reg_enet)
+par(mfrow = c(1,1))
+# Linearity Data
+plot(lin_reg_enet, 1)
+# Homogeneity of variance
+plot(lin_reg_enet,3)
+# Normality of Residuals
+plot(lin_reg_enet, 2)
+# Outliers
+plot(lin_reg_enet, 5)
+
+# Presence of some outliers impacting the assumptions slightly
+
+#-------------Secondary Filter: Random Forest-------------------
+
+# Applying a Second Filter of Variable Importance using Random Forest from the 46 variables chosen by Elastic Net Regression
+
+# Getting all variables selected by ENET
+all_enet_vars <- selected_vars_enet$Variable
+
+# Subsettinh original dataframe with State, District, target variable, and all ENET-selected variables
+origin_df_enet_rf <- origin_df_clean_2 %>%
+  dplyr::select(State, District, Women.Age.Group.15.To.49.Years.Who.Are.Anaemic, all_of(all_enet_vars))
+
+# creating temporary dataset without State and District variables
+temp_df_enet_rf <- origin_df_enet_rf %>%
+  dplyr::select(-State, -District)
+
+# Random Forest
+enet_rf_model <- randomForest::randomForest(Women.Age.Group.15.To.49.Years.Who.Are.Anaemic ~., data = temp_df_enet_rf, importance = TRUE)
+# Ten Important variables
+variable_importance <- importance(enet_rf_model)
+sorted_importance <- data.frame(variable_importance[order(-variable_importance[, 1]), ])
+head(sorted_importance, 10)
+barplot(sorted_importance[, 1], names.arg = rownames(sorted_importance), las = 2, col = "blue", main = "Variable Importance")
+
+#--------------Secondary Filter: Boruta--------------
+
+boruta_output <- Boruta(Women.Age.Group.15.To.49.Years.Who.Are.Anaemic ~., 
+                        data = temp_df_enet_rf, doTrace=2)
+boruta_signif <- names(boruta_output$finalDecision[boruta_output$finalDecision %in% c("Confirmed", "Tentative")])
+plot(boruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")
+print(boruta_signif)
+
+# Converting Boruta results to data frame
+imp_scores_boruta <- attStats(boruta_output)
+
+# Filtering for Confirmed and Tentative variables
+imp_scores_filtered_boruta <- imp_scores[rownames(imp_scores_boruta) %in% boruta_signif, ]
+
+# Ordering by median importance
+top10_boruta_vars <- imp_scores_filtered_boruta %>%
+  dplyr::arrange(desc(medianImp)) %>%
+  head(10)
+
+# Variable Names
+top10_var_names_boruta <- rownames(top10_boruta_vars)
+print(top10_var_names_boruta)
+
+# top 8 variables are identical in both Boruta and Random Forest ranking
+# Boruta being more robust, selecting its top 10 variables by importance
+# Getting the final dataset
+final_dataset <- origin_df_enet_rf %>% dplyr::select(State, District, Women.Age.Group.15.To.49.Years.Who.Are.Anaemic, all_of(top10_var_names_boruta))
+colnames(final_dataset)
+# Renaming the columns
+colnames(final_dataset) <- c(
+  "State",
+  "District",
+  "Women_Anaemic_15_49",
+  "Children_Anaemic_6_59_Months",
+  "Women_High_Blood_Sugar",
+  "Teen_Mothers_15_19",
+  "Women_BMI_Below_Normal",
+  "Children_Underweight_U5",
+  "Women_Married_Before_18_20_24",
+  "Women_Consume_Alcohol_15Plus",
+  "Female_Ever_Attended_School_6Plus",
+  "Married_Women_Using_Pill_15_49",
+  "Women_Literate_15_49"
+)
+
+# Proceeding with linear regression to eliminate variables based on p-values
+
+# creating temporary dataset without State and District variables
+temp_final_df <- final_dataset %>%
+  dplyr::select(-State, -District)
+
+
+lm_final <- lm(Women_Anaemic_15_49 ~., data = temp_final_df)
+summary(lm_final)
+# Significant variables according to p-values
+
+# Checking Linear Regression assumptions
+
+# (a) Collinearity
+cor_final <- cor(temp_final_df)
+corrplot(cor_final, order = "FPC", method = "color", type = "lower", tl.cex = 0.7, tl.col = rgb(0, 0, 0))
+findCorrelation(cor_final, cutoff = 0.7)
+# Finding the pairs of variables with high correlation
+as.data.frame(unique(t(apply(which(abs(cor(temp_final_df)) > 0.7 & abs(cor(temp_final_df)) < 1, arr.ind = TRUE), 1, function(i) sort(colnames(temp_final_df)[i]))))) %>% view()
+# VIF Check
+vif(lm_final)
+
+# Looking at significance levels from regression, high collinearity values and VIF values, dropping the variables Women_Literate_15_49, Women_Married_Before_18_20_24 as Teen_Mothers_15_19, Female_Ever_Attended_School_6Plus convey same meaning
+
+final_dataset_2 <- final_dataset %>%
+  dplyr::select(-Women_Literate_15_49, -Women_Married_Before_18_20_24)
+
+# Exporting to CSV (final dataset)
+write.csv(final_dataset_2, 
+          "Processed_dataset.csv", row.names = FALSE)
+
+# Running the linear regression again
+
+# creating temporary dataset without State and District variables
+temp_final_df_2 <- final_dataset_2 %>%
+  dplyr::select(-State, -District)
+
+lm_final_2 <- lm(Women_Anaemic_15_49 ~., data = temp_final_df_2)
+summary(lm_final_2)
+# Significant variables according to p-values
+# Checking Linear Regression assumptions
+# (a) Collinearity
+cor_final_2 <- cor(temp_final_df_2)
+corrplot(cor_final_2, order = "FPC", method = "color", type = "lower", tl.cex = 0.7, tl.col = rgb(0, 0, 0))
+findCorrelation(cor_final_2, cutoff = 0.7)
+# Finding the pairs of variables with high correlation
+as.data.frame(unique(t(apply(which(abs(cor(temp_final_df_2)) > 0.7 & abs(cor(temp_final_df_2)) < 1, arr.ind = TRUE), 1, function(i) sort(colnames(temp_final_df_2)[i]))))) %>% view()
+# VIF Check
+vif(lm_final_2)
+
+# Diagnostic Checks
+# (b) Diagnostic Plots
+par(mfrow = c(2,2))
+plot(lm_final_2)
+par(mfrow = c(1,1))
+# Linearity Data
+plot(lm_final_2, 1)
+# Homogeneity of variance
+plot(lm_final_2,3)
+# Normality of Residuals
+plot(lm_final_2, 2)
+# Outliers
+plot(lm_final_2, 5)
+
+# Comparing the three linear regression models
+#lin_reg_enet
+#lm_final
+#lm_final_2
+
+# R-Squared Values Check
+summary(lin_reg_enet)$adj.r.squared
+summary(lm_final)$adj.r.squared
+summary(lm_final_2)$adj.r.squared
+# AIC/ BIC
+AIC(lin_reg_enet, lm_final, lm_final_2)
+BIC(lin_reg_enet, lm_final, lm_final_2)
+
+# Model lm_final_2 was selected for Geographically Weighted Regression due to its comparable adjusted R², lowest AIC and BIC, and a simpler, non-collinear structure optimal for localised modelling.
+
+save.image(file = "gwr_nfhs_assam_1.RData")
+
+
