@@ -10,6 +10,8 @@ getwd()
 # Packages
 library(tidyverse)
 library(MASS)
+library(glmnet)
+library(caret)
 
 # NFHS Dataset Downloaded from NDAP (https://ndap.niti.gov.in/dataset/6822)
 # Importing
@@ -212,5 +214,16 @@ origin_df_rg <- origin_df_clean_2[, intersect(temp_vars_pre, colnames(origin_df_
 write.csv(origin_df_rg, "Dataset_with_significant_variables_with_stepwise_regression.csv", row.names = FALSE)
 
 #-----------Elastic Net Regression--------------------
-
-
+# Creating a new dataframe for Elastic Net Regression
+temp_df_enet <- origin_df_clean_2 %>% 
+  dplyr::select(-State, -District)
+# This is the target variable
+target_var <- "Women.Age.Group.15.To.49.Years.Who.Are.Anaemic"
+# Target variable Y
+y_enet <- temp_df_enet$Women.Age.Group.15.To.49.Years.Who.Are.Anaemic
+# Predictor matrix
+x_enet <- temp_df_enet %>%
+  dplyr::select(-all_of(target_var)) %>%
+  as.matrix() 
+# data
+data_enet <- cbind(x_enet, y_enet)
