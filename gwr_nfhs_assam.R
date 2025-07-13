@@ -69,7 +69,7 @@ columns_remove <- c(
 )
 
 # Creating a new dataframe
-origin_df_clean <- origin_df %>% select(-any_of(columns_remove)) 
+origin_df_clean <- origin_df %>% dplyr::select(-any_of(columns_remove)) 
 
 # Dimensions check
 dim(origin_df_clean)
@@ -91,7 +91,7 @@ origin_df_clean %>%
     short_col = str_trunc(column, width = 60),  # Adjust width as needed
     pct_missing = round(na_count / nrow(origin_df_clean) * 100, 2)
   ) %>%
-  select(short_col, na_count, pct_missing) %>%
+  dplyr::select(short_col, na_count, pct_missing) %>%
   arrange(desc(na_count)) %>%
   print(n = Inf)
 
@@ -163,11 +163,13 @@ origin_df_clean_2 <- origin_df_clean_2 %>%
     -Pregnant.Women.Age.Group.15.To.49.Years.Who.Are.Anaemic
   )
 
+#-------------StepWise Variable Selection---------------------
+
 # Both-Direction Stepwise Selection (https://www.statology.org/stepwise-regression-r/)
 # Creating temporary dataframe
 temp_df <- origin_df_clean_2 %>% 
   dplyr::select(-State, -District)
-intercept_only 
+
 # Defining target variable
 target_var <- "Women.Age.Group.15.To.49.Years.Who.Are.Anaemic"
 
@@ -176,4 +178,39 @@ res_lm <- lm(as.formula(paste(target_var, "~ .")), data = temp_df)
 step_lm <- stepAIC(res_lm, direction = "both", trace = FALSE)
 summary(step_lm)
 
-summary(step_lm)$coefficients
+# Extracting coefficients summary
+coef_step <- summary(step_lm)$coefficients
+# Creating significance labels based on p-values for easier understanding
+significance_labels_step <- cut(coef_step[,4], 
+                           breaks = c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf), 
+                           labels = c("***", "**", "*", ".", " "))
+
+# Combining with original coefficient matrix
+coef_with_sig_step <- cbind(coef_step, Signif = significance_labels_step)
+
+# Updating significance codes to readable symbols
+signif_symbols_step <- c("***", "**", "*", ".", " ")
+coef_with_sig_step[, "Signif"] <- signif_symbols_step[as.numeric(coef_with_sig_step[, "Signif"])]
+
+# View final table with proper significance stars
+print(coef_with_sig_step)
+
+# Adding row names as column for exporting it to CSV
+coef_with_sig_step_csv <- cbind(Variable = rownames(coef_with_sig_step), coef_with_sig_step)
+
+# Writing it as a CSV
+write.csv(coef_with_sig_step_csv, "stepwise_regression_results.csv", row.names = FALSE)
+
+# Only keeping those variables with p < 0.01
+sig_vars_step <- rownames(coef_with_sig_step)[coef_with_sig_step[, "Pr(>|t|)"] < 0.01]
+sig_vars_step
+# Ensuring that target and geo identifiers are preserved
+temp_vars_pre <- c("State", "District", "Women.Age.Group.15.To.49.Years.Who.Are.Anaemic", sig_vars_step)
+# Creating new dataframe with target and geo-identifiers and significant variables
+origin_df_rg <- origin_df_clean_2[, intersect(temp_vars_pre, colnames(origin_df_clean_2))]
+# Exporting to CSV
+write.csv(origin_df_rg, "Dataset_with_significant_variables_with_stepwise_regression.csv", row.names = FALSE)
+
+#-----------Elastic Net Regression--------------------
+
+
